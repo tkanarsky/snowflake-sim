@@ -161,19 +161,24 @@ const SnowflakeSimulation = () => {
 
   // UI state
   const [isPlaying, setIsPlaying] = useState(false);
-  const [showEngineering, setShowEngineering] = useState(false);
+  const [showEngineering, setShowEngineering] = useState(true);
+  const [showTrail, setShowTrail] = useState(true);
   
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number | undefined>(undefined);
   const lastTimeRef = useRef<number>(0);
   const snowflakesRef = useRef<SnowflakeState[]>([]);
+  const trailHistoryRef = useRef<Array<Array<[number, number]>>>([]);
 
   // Initialize snowflakes
   const resetSnowflakes = () => {
     snowflakesRef.current = Array(params.numFlakes)
       .fill(null)
       .map(() => createSnowflake(params));
+    trailHistoryRef.current = Array(params.numFlakes)
+      .fill(null)
+      .map(() => []);
   };
 
   // Canvas setup
@@ -200,11 +205,21 @@ const SnowflakeSimulation = () => {
 
     // Update physics
     for (let step = 0; step < numSubsteps; step++) {
-      snowflakesRef.current = snowflakesRef.current.map(flake => {
+      snowflakesRef.current = snowflakesRef.current.map((flake, index) => {
         const updated = updateSnowflake(flake, subDt, params);
+        
+        // Store trail history
+        if (showTrail) {
+          if (!trailHistoryRef.current[index]) {
+            trailHistoryRef.current[index] = [];
+          }
+          trailHistoryRef.current[index].push([updated.position[0], updated.position[1]]);
+          // Keep only last 50 positions
+        }
         
         // Reset if below ground
         if (updated.position[1] < 1.0) {
+          trailHistoryRef.current[index] = [];
           return createSnowflake(params);
         }
         
@@ -223,7 +238,27 @@ const SnowflakeSimulation = () => {
     ctx.fillStyle = '#333';
     ctx.fillRect(0, ctx.canvas.height - scale, ctx.canvas.width, scale);
 
-    snowflakesRef.current.forEach(flake => {
+    // Draw trails first
+    if (showTrail) {
+      ctx.strokeStyle = 'rgb(255, 255, 255)';
+      ctx.lineWidth = 2;
+      
+      trailHistoryRef.current.forEach(trail => {
+        if (!trail || trail.length < 2) return;
+        
+        ctx.beginPath();
+        const [firstX, firstY] = trail[0];
+        ctx.moveTo(firstX * scale, ctx.canvas.height - firstY * scale);
+        
+        for (let i = 1; i < trail.length; i++) {
+          const [x, y] = trail[i];
+          ctx.lineTo(x * scale, ctx.canvas.height - y * scale);
+        }
+        ctx.stroke();
+      });
+    }
+
+    snowflakesRef.current.forEach((flake, index) => {
       const [x, y] = flake.position;
       const screenX = x * scale;
       const screenY = ctx.canvas.height - y * scale;
@@ -383,6 +418,12 @@ const SnowflakeSimulation = () => {
           checked={showEngineering}
           onChange={(e) => setShowEngineering(e.target.checked)}
           label="Engineering View"
+        />
+
+        <Checkbox
+          checked={showTrail}
+          onChange={(e) => setShowTrail(e.target.checked)}
+          label="Show Trail"
         />
       </Card>
 
