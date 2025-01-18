@@ -11,7 +11,6 @@ interface SnowflakeState {
   omega: number;
   mass: number;
   diameter: number;
-  offsetMass: number;  // mass at one end in kg
 }
 
 interface SimParams {
@@ -24,8 +23,6 @@ interface SimParams {
   diameterVar: number;
   thetaMean: number;
   thetaVar: number;
-  offsetMassMean: number;
-  offsetMassVar: number;
 }
 
 // Utility Functions
@@ -44,7 +41,6 @@ const createSnowflake = (params: SimParams): SnowflakeState => ({
   omega: 0,
   mass: normalRandom(params.massMean, params.massVar) / 1e6, // Convert mg to kg
   diameter: normalRandom(params.diameterMean, params.diameterVar) / 1000, // Convert mm to m
-  offsetMass: normalRandom(params.offsetMassMean, params.offsetMassVar) / 1e6 // Convert mg to kg
 });
 
 // Physics update function from previous discussion
@@ -103,8 +99,7 @@ function updateSnowflake(
     theta: new_theta,
     omega: new_omega,
     mass: state.mass,
-    diameter: state.diameter,
-    offsetMass: state.offsetMass
+    diameter: state.diameter
   };
 }
 
@@ -161,9 +156,7 @@ const SnowflakeSimulation = () => {
     diameterMean: 5.0,
     diameterVar: 0,
     thetaMean: 45,
-    thetaVar: 0,
-    offsetMassMean: 0.1,
-    offsetMassVar: 0
+    thetaVar: 0
   });
 
   // UI state
@@ -324,16 +317,6 @@ const SnowflakeSimulation = () => {
           varValue={params.thetaVar}
           onMeanChange={(v) => setParams(p => ({ ...p, thetaMean: v }))}
           onVarChange={(v) => setParams(p => ({ ...p, thetaVar: v }))}
-        />
-
-        <DistSlider
-          label="Offset Mass (mg)"
-          min={0}
-          max={1}
-          meanValue={params.offsetMassMean}
-          varValue={params.offsetMassVar}
-          onMeanChange={(v) => setParams(p => ({ ...p, offsetMassMean: v }))}
-          onVarChange={(v) => setParams(p => ({ ...p, offsetMassVar: v }))}
         />
 
         <div className="space-y-2">
