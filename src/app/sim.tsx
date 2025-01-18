@@ -26,6 +26,15 @@ interface SimParams {
 }
 
 // Utility Functions
+const normalizeAngle = (angle: number): number => {
+  // Normalize angle to [0, 2π]
+  angle = angle % (2 * Math.PI);
+  if (angle < 0) {
+    angle += 2 * Math.PI;
+  }
+  return angle;
+};
+
 const normalRandom = (mean: number, variance: number) => {
   let u = 0, v = 0;
   while(u === 0) u = Math.random();
@@ -35,9 +44,9 @@ const normalRandom = (mean: number, variance: number) => {
 };
 
 const createSnowflake = (params: SimParams): SnowflakeState => ({
-  position: [1.5, 9.0],  // Starting position
+  position: [Math.random() * 3.0, 9.0],  // Random x position from 0 to 3 meters, fixed y at 9 meters
   velocity: [0, 0],
-  theta: normalRandom(params.thetaMean * Math.PI / 180, params.thetaVar * Math.PI / 180),
+  theta: normalizeAngle(normalRandom(params.thetaMean * Math.PI / 180, params.thetaVar * Math.PI / 180)),
   omega: 0,
   mass: normalRandom(params.massMean, params.massVar) / 1e6, // Convert mg to kg
   diameter: normalRandom(params.diameterMean, params.diameterVar) / 1000, // Convert mm to m
@@ -66,7 +75,7 @@ function updateSnowflake(
   }
   
   // Projected area now considers both angle of attack and diameter
-  const minArea = 0.2 * state.diameter * state.diameter; // Minimum area when edge-on
+  const minArea = 0.7 * state.diameter * state.diameter; // Minimum area when edge-on
   const maxArea = state.diameter * state.diameter; // Maximum area when face-on
   const A = minArea + ((maxArea - minArea) * Math.sin(aoa));
   
@@ -89,7 +98,7 @@ function updateSnowflake(
   const alpha = torque / I;
   
   const new_omega = state.omega + alpha * dt;
-  const new_theta = state.theta + new_omega * dt;
+  const new_theta = normalizeAngle(state.theta + new_omega * dt);
   const new_vx = state.velocity[0] + ax * dt;
   const new_vy = state.velocity[1] + ay * dt;
   const new_x = state.position[0] + new_vx * dt;
@@ -152,13 +161,13 @@ const SnowflakeSimulation = () => {
   const [params, setParams] = useState<SimParams>({
     g: 9.81,
     airPressure: 1.0,
-    numFlakes: 100,
+    numFlakes: 1000,
     massMean: 1.0,
     massVar: 0.15,
-    diameterMean: 5.0,
+    diameterMean: 6.0,
     diameterVar: 1.0,
-    thetaMean: 45,
-    thetaVar: 12
+    thetaMean: 47,
+    thetaVar: 100
   });
 
   // UI state
@@ -390,7 +399,7 @@ const SnowflakeSimulation = () => {
           </label>
           <Slider
             min={1}
-            max={100}
+            max={1000}
             stepSize={1}
             labelStepSize={5}
             value={params.numFlakes}
