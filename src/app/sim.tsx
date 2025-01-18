@@ -66,24 +66,26 @@ function updateSnowflake(
   }
   
   // Projected area now considers both angle of attack and diameter
-  const A = state.diameter * state.diameter * Math.abs(Math.sin(aoa));
+  const minArea = 0.2 * state.diameter * state.diameter; // Minimum area when edge-on
+  const maxArea = state.diameter * state.diameter; // Maximum area when face-on
+  const A = minArea + ((maxArea - minArea) * Math.sin(aoa));
   
   // Modified drag and lift coefficients
   const Cd = 1.28;  // Constant drag coefficient
   const Cl = 0.5 * Math.sin(2 * aoa);  // Reduced lift coefficient
   
   // Calculate forces with dampening at high speeds
-  const speedFactor = Math.min(1.0, 10.0 / (vmag + 1.0));  // Dampen forces at high speeds
-  const Fdrag = 0.5 * rho * Cd * A * vmag * vmag * speedFactor;
-  const Flift = 0.5 * rho * Cl * A * vmag * vmag * speedFactor;
+//   const speedFactor = Math.min(1.0, 10.0 / (vmag + 1.0));  // Dampen forces at high speeds
+  const Fdrag = 0.5 * rho * Cd * A * vmag * vmag * 1;
+  const Flift = 0.5 * rho * Cl * A * vmag * vmag * 1;
   
   // Apply forces - note that drag acts against velocity direction
   const ax = vmag > 1e-6 ? (-Fdrag * vx + Flift * nx) / state.mass : 0;
   const ay = vmag > 1e-6 ? (-Fdrag * vy + Flift * ny) / state.mass - g : -g;
   
   // Reduced torque coefficient
-  const torque = -0.01 * state.diameter * Flift;  // Reduced torque
-  const I = 0.25 * state.mass * state.diameter * state.diameter;
+  const torque = -0.0005 * state.diameter * Flift;  // Reduced torque
+  const I = (1/12) * state.mass * state.diameter * state.diameter;
   const alpha = torque / I;
   
   const new_omega = state.omega + alpha * dt;
@@ -150,13 +152,13 @@ const SnowflakeSimulation = () => {
   const [params, setParams] = useState<SimParams>({
     g: 9.81,
     airPressure: 1.0,
-    numFlakes: 1,
+    numFlakes: 100,
     massMean: 1.0,
-    massVar: 0,
+    massVar: 0.15,
     diameterMean: 5.0,
-    diameterVar: 0,
+    diameterVar: 1.0,
     thetaMean: 45,
-    thetaVar: 0
+    thetaVar: 12
   });
 
   // UI state
@@ -388,7 +390,7 @@ const SnowflakeSimulation = () => {
           </label>
           <Slider
             min={1}
-            max={20}
+            max={100}
             stepSize={1}
             labelStepSize={5}
             value={params.numFlakes}
