@@ -3,6 +3,15 @@ import { Card } from '../components/ui/card';
 import { Slider, Button, Checkbox } from '@blueprintjs/core';
 import '@blueprintjs/core/lib/css/blueprint.css';
 
+// Simulation Dimensions (in meters unless specified)
+const SIM_WIDTH = 10.0;
+const SIM_HEIGHT = 10.0;
+const SPAWN_HEIGHT = 9.0;
+const GROUND_LEVEL = 1.0;
+const LIGHT_SOURCE_X = SIM_WIDTH / 2;
+const LIGHT_SOURCE_Y = SIM_HEIGHT;
+const PIXELS_PER_METER = 200;
+
 // Constants and Types
 interface LiveParams {
   g: number;
@@ -15,6 +24,8 @@ interface LiveParams {
   specularExponent: number;
   beamAngle: number;
   lightFalloffCoeff: number;
+  lightconeOpacityTop: number;
+  lightconeOpacityBottom: number;
 }
 
 interface InitParams {
@@ -57,7 +68,7 @@ const normalRandom = (mean: number, variance: number) => {
 };
 
 const createSnowflake = (initParams: InitParams, liveParams: LiveParams): SnowflakeState => ({
-  position: [Math.random() * 3.0, 9.0],  // Random x position from 0 to 3 meters, fixed y at 9 meters
+  position: [Math.random() * SIM_WIDTH, SPAWN_HEIGHT],  // Random x position from 0 to SIM_WIDTH meters, fixed y at SPAWN_HEIGHT meters
   velocity: [liveParams.windSpeedTop, 0], // Match wind speed at top, slight downward velocity
   theta: normalizeAngle(normalRandom(initParams.thetaMean * Math.PI / 180, initParams.thetaVar * Math.PI / 180)),
   omega: 0,
@@ -77,7 +88,7 @@ function updateSnowflake(
   const ny = Math.sin(state.theta);
   
   // Interpolate wind speed based on height
-  const heightRatio = state.position[1] / 10.0; // 10m is max height
+  const heightRatio = state.position[1] / SIM_HEIGHT; // SIM_HEIGHT is max height
   const currentWindSpeed = windSpeedBottom + (windSpeedTop - windSpeedBottom) * heightRatio;
   
   // Adjust velocity for wind
@@ -122,8 +133,8 @@ function updateSnowflake(
   let wrapped_x = new_x;
   
   // Wrap around screen horizontally
-  if (new_x < 0) wrapped_x = 3.0 + (new_x % 3.0);
-  if (new_x > 3.0) wrapped_x = new_x % 3.0;
+  if (new_x < 0) wrapped_x = SIM_WIDTH + (new_x % SIM_WIDTH);
+  if (new_x > SIM_WIDTH) wrapped_x = new_x % SIM_WIDTH;
   
   const new_y = state.position[1] + new_vy * dt;
   
@@ -194,14 +205,16 @@ const SnowflakeSimulation = () => {
   const liveParams = useRef<LiveParams>({
     g: 9.81,
     airPressure: 0.7,
-    windSpeedTop: 0,
-    windSpeedBottom: 0,
-    ambientLight: 0.05,
+    windSpeedTop: 2,
+    windSpeedBottom: 1,
+    ambientLight: 0.15,
     diffuseLight: 0.7,
-    specularStrength: 0.9,
+    specularStrength: 0.95,
     specularExponent: 15,
-    beamAngle: 40, // Default 40-degree cone
-    lightFalloffCoeff: 0.005  // Added default value
+    beamAngle: 40,
+    lightFalloffCoeff: 0.005,
+    lightconeOpacityTop: 0.1,
+    lightconeOpacityBottom: 0.01
   });
 
   // Simulation parameters that require reset
@@ -226,7 +239,9 @@ const SnowflakeSimulation = () => {
     specularStrength: liveParams.current.specularStrength,
     specularExponent: liveParams.current.specularExponent,
     beamAngle: liveParams.current.beamAngle,
-    lightFalloffCoeff: liveParams.current.lightFalloffCoeff  // Added new state
+    lightFalloffCoeff: liveParams.current.lightFalloffCoeff,
+    lightconeOpacityTop: liveParams.current.lightconeOpacityTop,
+    lightconeOpacityBottom: liveParams.current.lightconeOpacityBottom
   });
 
   // UI state
@@ -256,8 +271,8 @@ const SnowflakeSimulation = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    canvas.width = 600;  // 3m * 200px/m
-    canvas.height = 2000; // 10m * 200px/m
+    canvas.width = SIM_WIDTH * PIXELS_PER_METER;  // SIM_WIDTH * pixels/meter
+    canvas.height = SIM_HEIGHT * PIXELS_PER_METER; // SIM_HEIGHT * pixels/meter
     
     resetSnowflakes();
   }, [params.numFlakes]);
@@ -284,11 +299,10 @@ const SnowflakeSimulation = () => {
             trailHistoryRef.current[index] = [];
           }
           trailHistoryRef.current[index].push([updated.position[0], updated.position[1]]);
-          // Keep only last 50 positions
         }
         
-        // Reset if below ground
-        if (updated.position[1] < 1.0) {
+        // Reset if below ground level
+        if (updated.position[1] < GROUND_LEVEL) {
           trailHistoryRef.current[index] = [];
           return createSnowflake(params, liveParams.current);
         }
@@ -299,28 +313,26 @@ const SnowflakeSimulation = () => {
 
     // Render
     const ctx = canvasRef.current.getContext('2d')!;
-    const scale = 200; // pixels per meter
+    const scale = PIXELS_PER_METER;
     
     ctx.fillStyle = 'black';
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     // Draw ground
     ctx.fillStyle = '#333';
-    ctx.fillRect(0, ctx.canvas.height - scale, ctx.canvas.width, scale);
+    ctx.fillRect(0, ctx.canvas.height - scale * GROUND_LEVEL, ctx.canvas.width, scale * GROUND_LEVEL);
 
     // Draw light cone
-    const LIGHT_X = 1.5;
-    const LIGHT_Y = 10.0;
-    const screenLightX = LIGHT_X * scale;
-    const screenLightY = ctx.canvas.height - LIGHT_Y * scale;
+    const screenLightX = LIGHT_SOURCE_X * scale;
+    const screenLightY = ctx.canvas.height - LIGHT_SOURCE_Y * scale;
     
     // Create gradient for the light cone
     const gradient = ctx.createRadialGradient(
       screenLightX, screenLightY, 0,
       screenLightX, screenLightY, ctx.canvas.height
     );
-    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
-    gradient.addColorStop(1, 'rgba(255, 255, 255, 0.01)');
+    gradient.addColorStop(0, `rgba(255, 255, 255, ${liveParams.current.lightconeOpacityTop})`);
+    gradient.addColorStop(1, `rgba(255, 255, 255, ${liveParams.current.lightconeOpacityBottom})`);
     
     // Draw the light cone
     ctx.save();
@@ -450,12 +462,10 @@ const SnowflakeSimulation = () => {
 
   // Calculate lighting for a snowflake
   const calculateLighting = (x: number, y: number, nx: number, ny: number): number => {
-    const LIGHT_X = 1.5;
-    const LIGHT_Y = 10.0;
     
     // Calculate light direction (normalized)
-    const dx = x - LIGHT_X;
-    const dy = y - LIGHT_Y;
+    const dx = x - LIGHT_SOURCE_X;
+    const dy = y - LIGHT_SOURCE_Y;
     const dist = Math.hypot(dx, dy);
     
     // Early return if distance is effectively zero
@@ -709,6 +719,40 @@ const SnowflakeSimulation = () => {
           />
         </div>
 
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Light Cone Top Opacity: {uiState.lightconeOpacityTop.toFixed(2)}
+          </label>
+          <Slider
+            min={0}
+            max={1}
+            stepSize={0.01}
+            labelStepSize={0.2}
+            value={uiState.lightconeOpacityTop}
+            onChange={(v) => {
+              liveParams.current.lightconeOpacityTop = v;
+              setUiState(s => ({ ...s, lightconeOpacityTop: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Light Cone Bottom Opacity: {uiState.lightconeOpacityBottom.toFixed(2)}
+          </label>
+          <Slider
+            min={0}
+            max={1}
+            stepSize={0.01}
+            labelStepSize={0.2}
+            value={uiState.lightconeOpacityBottom}
+            onChange={(v) => {
+              liveParams.current.lightconeOpacityBottom = v;
+              setUiState(s => ({ ...s, lightconeOpacityBottom: v }));
+            }}
+          />
+        </div>
+
         <div className="flex gap-2">
           <Button
             intent={isPlaying ? "danger" : "primary"}
@@ -745,8 +789,8 @@ const SnowflakeSimulation = () => {
         <canvas
           ref={canvasRef}
           style={{
-            width: '300px',
-            height: '1000px'
+            width: `${SIM_WIDTH * PIXELS_PER_METER/2}px`,
+            height: `${SIM_HEIGHT * PIXELS_PER_METER/2}px`
           }}
         />
       </div>
