@@ -14,6 +14,7 @@ interface LiveParams {
   specularStrength: number;
   specularExponent: number;
   beamAngle: number;
+  lightFalloffCoeff: number;
 }
 
 interface InitParams {
@@ -55,9 +56,9 @@ const normalRandom = (mean: number, variance: number) => {
   return mean + std * Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 };
 
-const createSnowflake = (initParams: InitParams): SnowflakeState => ({
+const createSnowflake = (initParams: InitParams, liveParams: LiveParams): SnowflakeState => ({
   position: [Math.random() * 3.0, 9.0],  // Random x position from 0 to 3 meters, fixed y at 9 meters
-  velocity: [0, 0],
+  velocity: [liveParams.windSpeedTop, 0], // Match wind speed at top, slight downward velocity
   theta: normalizeAngle(normalRandom(initParams.thetaMean * Math.PI / 180, initParams.thetaVar * Math.PI / 180)),
   omega: 0,
   mass: normalRandom(initParams.massMean, initParams.massVar) / 1e6, // Convert mg to kg
@@ -137,7 +138,17 @@ function updateSnowflake(
 }
 
 // DistSlider Component
-const DistSlider = ({ 
+interface DistSliderProps {
+  label: string;
+  min: number;
+  max: number;
+  meanValue: number;
+  varValue: number;
+  onMeanChange: (value: number) => void;
+  onVarChange: (value: number) => void;
+}
+
+const DistSlider: React.FC<DistSliderProps> = ({ 
   label, 
   min, 
   max, 
@@ -182,22 +193,23 @@ const SnowflakeSimulation = () => {
   // Split params into live-update refs and initialization-only state
   const liveParams = useRef<LiveParams>({
     g: 9.81,
-    airPressure: 1.0,
+    airPressure: 0.7,
     windSpeedTop: 0,
     windSpeedBottom: 0,
-    ambientLight: 0.1,
-    diffuseLight: 0.5,
-    specularStrength: 0.8,
-    specularExponent: 50,
-    beamAngle: 30 // Default 30-degree cone
+    ambientLight: 0.05,
+    diffuseLight: 0.7,
+    specularStrength: 0.9,
+    specularExponent: 15,
+    beamAngle: 40, // Default 40-degree cone
+    lightFalloffCoeff: 0.005  // Added default value
   });
 
   // Simulation parameters that require reset
   const [params, setParams] = useState<InitParams>({
-    numFlakes: 1000,
-    massMean: 1.0,
-    massVar: 0.15,
-    diameterMean: 6.0,
+    numFlakes: 2000,
+    massMean: 3.0,
+    massVar: 1.0,
+    diameterMean: 5.0,
     diameterVar: 1.0,
     thetaMean: 47,
     thetaVar: 70,
@@ -213,7 +225,8 @@ const SnowflakeSimulation = () => {
     diffuseLight: liveParams.current.diffuseLight,
     specularStrength: liveParams.current.specularStrength,
     specularExponent: liveParams.current.specularExponent,
-    beamAngle: liveParams.current.beamAngle
+    beamAngle: liveParams.current.beamAngle,
+    lightFalloffCoeff: liveParams.current.lightFalloffCoeff  // Added new state
   });
 
   // UI state
@@ -232,7 +245,7 @@ const SnowflakeSimulation = () => {
   const resetSnowflakes = () => {
     snowflakesRef.current = Array(params.numFlakes)
       .fill(null)
-      .map(() => createSnowflake(params));
+      .map(() => createSnowflake(params, liveParams.current));
     trailHistoryRef.current = Array(params.numFlakes)
       .fill(null)
       .map(() => []);
@@ -277,7 +290,7 @@ const SnowflakeSimulation = () => {
         // Reset if below ground
         if (updated.position[1] < 1.0) {
           trailHistoryRef.current[index] = [];
-          return createSnowflake(params);
+          return createSnowflake(params, liveParams.current);
         }
         
         return updated;
@@ -294,6 +307,43 @@ const SnowflakeSimulation = () => {
     // Draw ground
     ctx.fillStyle = '#333';
     ctx.fillRect(0, ctx.canvas.height - scale, ctx.canvas.width, scale);
+
+    // Draw light cone
+    const LIGHT_X = 1.5;
+    const LIGHT_Y = 10.0;
+    const screenLightX = LIGHT_X * scale;
+    const screenLightY = ctx.canvas.height - LIGHT_Y * scale;
+    
+    // Create gradient for the light cone
+    const gradient = ctx.createRadialGradient(
+      screenLightX, screenLightY, 0,
+      screenLightX, screenLightY, ctx.canvas.height
+    );
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0.01)');
+    
+    // Draw the light cone
+    ctx.save();
+    ctx.translate(screenLightX, screenLightY);
+    ctx.rotate(Math.PI / 2); // Rotate to point downward
+    
+    // Create light cone path
+    ctx.beginPath();
+    const angleRad = (liveParams.current.beamAngle / 2) * (Math.PI / 180);
+    const coneLength = ctx.canvas.height;
+    ctx.moveTo(0, 0);
+    ctx.lineTo(Math.cos(-angleRad) * coneLength, Math.sin(-angleRad) * coneLength);
+    ctx.lineTo(Math.cos(angleRad) * coneLength, Math.sin(angleRad) * coneLength);
+    ctx.closePath();
+    
+    // Apply blur filter
+    ctx.filter = 'blur(50px)';
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    
+    // Reset context state
+    ctx.filter = 'none';
+    ctx.restore();
 
     // Draw trails first
     if (showTrail) {
@@ -351,15 +401,30 @@ const SnowflakeSimulation = () => {
         );
         ctx.fill();
       } else {
-        // Draw simple snowflake with lighting
+        // Draw elliptical snowflake with lighting
         const nx = Math.cos(flake.theta);
         const ny = Math.sin(flake.theta);
         const brightness = calculateLighting(x, y, nx, ny);
         ctx.fillStyle = `rgb(${Math.round(brightness * 255)}, ${Math.round(brightness * 255)}, ${Math.round(brightness * 255)})`;
-        const pixelRadius = flake.diameter * 1000 * 1.5 / 2; // Convert m to mm, scale by 1.5px/mm, divide by 2 for radius
+        
+        // Calculate major and minor axes in pixels
+        const majorAxis = flake.diameter * 1000 * 1.5; // Convert m to mm, scale by 1.5px/mm
+        const minorAxis = majorAxis / 2; // Minor axis is half the major axis
+        
+        // Save current transform state
+        ctx.save();
+        
+        // Translate to snowflake center and rotate
+        ctx.translate(screenX, screenY);
+        ctx.rotate(flake.theta);
+        
+        // Draw ellipse
         ctx.beginPath();
-        ctx.arc(screenX, screenY, pixelRadius, 0, 2 * Math.PI);
+        ctx.ellipse(0, 0, majorAxis/2, minorAxis/2, 0, 0, 2 * Math.PI);
         ctx.fill();
+        
+        // Restore transform state
+        ctx.restore();
       }
     });
 
@@ -412,13 +477,16 @@ const SnowflakeSimulation = () => {
     const angleRatio = angleInDegrees / (liveParams.current.beamAngle / 2);
     const intensityFalloff = Math.cos(angleRatio * Math.PI / 2); // Smooth falloff
     
-    // Calculate surface lighting using the original dot product
-    const dotProduct = lightDirX * nx + lightDirY * ny;
+    // Calculate distance-based falloff using inverse square law
+    const distanceFalloff = 1.0 / (1.0 + liveParams.current.lightFalloffCoeff * dist * dist);
     
-    // Calculate components using live params and apply cone falloff
+    // Calculate surface lighting using the original dot product
+    const dotProduct = Math.abs(lightDirX * ny + lightDirY * nx);
+    
+    // Calculate components using live params and apply both cone and distance falloff
     const ambient = liveParams.current.ambientLight;
-    const diffuse = liveParams.current.diffuseLight * intensityFalloff;
-    const specular = Math.pow(Math.max(0, dotProduct), liveParams.current.specularExponent) * liveParams.current.specularStrength * intensityFalloff;
+    const diffuse = liveParams.current.diffuseLight * intensityFalloff * distanceFalloff;
+    const specular = Math.pow(dotProduct, liveParams.current.specularExponent) * liveParams.current.specularStrength * intensityFalloff;
     const coeffTotal = liveParams.current.ambientLight + liveParams.current.diffuseLight + liveParams.current.specularStrength;
     return Math.min(1.0, (ambient + diffuse + specular) / coeffTotal);
   };
@@ -497,7 +565,7 @@ const SnowflakeSimulation = () => {
           </label>
           <Slider
             min={1}
-            max={1000}
+            max={2000}
             stepSize={1}
             labelStepSize={5}
             value={params.numFlakes}
@@ -620,6 +688,23 @@ const SnowflakeSimulation = () => {
             onChange={(v) => {
               liveParams.current.beamAngle = v;
               setUiState(s => ({ ...s, beamAngle: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Light Falloff Coeff: {uiState.lightFalloffCoeff.toFixed(2)}
+          </label>
+          <Slider
+            min={0}
+            max={1}
+            stepSize={0.01}
+            labelStepSize={1}
+            value={uiState.lightFalloffCoeff}
+            onChange={(v) => {
+              liveParams.current.lightFalloffCoeff = v;
+              setUiState(s => ({ ...s, lightFalloffCoeff: v }));
             }}
           />
         </div>
