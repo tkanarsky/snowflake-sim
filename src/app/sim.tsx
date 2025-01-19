@@ -7,10 +7,13 @@ import '@blueprintjs/core/lib/css/blueprint.css';
 interface LiveParams {
   g: number;
   airPressure: number;
-  windSpeed: number;
+  windSpeedTop: number;
+  windSpeedBottom: number;
   ambientLight: number;
   diffuseLight: number;
   specularStrength: number;
+  specularExponent: number;
+  beamAngle: number;
 }
 
 interface InitParams {
@@ -65,15 +68,19 @@ const createSnowflake = (initParams: InitParams): SnowflakeState => ({
 function updateSnowflake(
   state: SnowflakeState,
   dt: number,
-  { g, airPressure, windSpeed }: LiveParams
+  { g, airPressure, windSpeedTop, windSpeedBottom }: LiveParams
 ): SnowflakeState {
   const rho = 1.225 * (airPressure / 1.0);
   
   const nx = Math.cos(state.theta);
   const ny = Math.sin(state.theta);
   
+  // Interpolate wind speed based on height
+  const heightRatio = state.position[1] / 10.0; // 10m is max height
+  const currentWindSpeed = windSpeedBottom + (windSpeedTop - windSpeedBottom) * heightRatio;
+  
   // Adjust velocity for wind
-  const relativeVx = state.velocity[0] - windSpeed;
+  const relativeVx = state.velocity[0] - currentWindSpeed;
   const vmag = Math.hypot(relativeVx, state.velocity[1]);
   
   // Handle zero velocity case properly
@@ -176,10 +183,13 @@ const SnowflakeSimulation = () => {
   const liveParams = useRef<LiveParams>({
     g: 9.81,
     airPressure: 1.0,
-    windSpeed: 0,
-    ambientLight: 0.2,
+    windSpeedTop: 0,
+    windSpeedBottom: 0,
+    ambientLight: 0.1,
     diffuseLight: 0.5,
-    specularStrength: 0.8
+    specularStrength: 0.8,
+    specularExponent: 50,
+    beamAngle: 30 // Default 30-degree cone
   });
 
   // Simulation parameters that require reset
@@ -190,23 +200,26 @@ const SnowflakeSimulation = () => {
     diameterMean: 6.0,
     diameterVar: 1.0,
     thetaMean: 47,
-    thetaVar: 100,
+    thetaVar: 70,
   });
 
   // UI state for controlled components (sliders)
   const [uiState, setUiState] = useState({
     g: liveParams.current.g,
     airPressure: liveParams.current.airPressure,
-    windSpeed: liveParams.current.windSpeed,
+    windSpeedTop: liveParams.current.windSpeedTop,
+    windSpeedBottom: liveParams.current.windSpeedBottom,
     ambientLight: liveParams.current.ambientLight,
     diffuseLight: liveParams.current.diffuseLight,
-    specularStrength: liveParams.current.specularStrength
+    specularStrength: liveParams.current.specularStrength,
+    specularExponent: liveParams.current.specularExponent,
+    beamAngle: liveParams.current.beamAngle
   });
 
   // UI state
   const [isPlaying, setIsPlaying] = useState(false);
-  const [showEngineering, setShowEngineering] = useState(true);
-  const [showTrail, setShowTrail] = useState(true);
+  const [showEngineering, setShowEngineering] = useState(false);
+  const [showTrail, setShowTrail] = useState(false);
   
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -312,16 +325,17 @@ const SnowflakeSimulation = () => {
         const nx = Math.cos(flake.theta);
         const ny = Math.sin(flake.theta);
         const brightness = calculateLighting(x, y, nx, ny);
-        ctx.strokeStyle = `rgba(255, 255, 255, ${brightness})`;
-        ctx.lineWidth = 5;
+        ctx.strokeStyle = `rgb(${Math.round(brightness * 255)}, ${Math.round(brightness * 255)}, ${Math.round(brightness * 255)})`;
+        const pixelDiameter = flake.diameter * 1000 * 1.5; // Convert m to mm, then scale by 1.5px/mm
+        ctx.lineWidth = pixelDiameter;
         ctx.beginPath();
         ctx.moveTo(
-          screenX - nx * 10,
-          screenY + ny * 10
+          screenX - nx * pixelDiameter,
+          screenY + ny * pixelDiameter
         );
         ctx.lineTo(
-          screenX + nx * 10,
-          screenY - ny * 10
+          screenX + nx * pixelDiameter,
+          screenY - ny * pixelDiameter
         );
         ctx.stroke();
 
@@ -329,8 +343,8 @@ const SnowflakeSimulation = () => {
         ctx.fillStyle = 'blue';
         ctx.beginPath();
         ctx.arc(
-          screenX + nx * 10,
-          screenY - ny * 10,
+          screenX + nx * pixelDiameter,
+          screenY - ny * pixelDiameter,
           3,
           0,
           2 * Math.PI
@@ -341,9 +355,10 @@ const SnowflakeSimulation = () => {
         const nx = Math.cos(flake.theta);
         const ny = Math.sin(flake.theta);
         const brightness = calculateLighting(x, y, nx, ny);
-        ctx.fillStyle = `rgba(255, 255, 255, ${brightness})`;
+        ctx.fillStyle = `rgb(${Math.round(brightness * 255)}, ${Math.round(brightness * 255)}, ${Math.round(brightness * 255)})`;
+        const pixelRadius = flake.diameter * 1000 * 1.5 / 2; // Convert m to mm, scale by 1.5px/mm, divide by 2 for radius
         ctx.beginPath();
-        ctx.arc(screenX, screenY, 2.5, 0, 2 * Math.PI);
+        ctx.arc(screenX, screenY, pixelRadius, 0, 2 * Math.PI);
         ctx.fill();
       }
     });
@@ -377,17 +392,35 @@ const SnowflakeSimulation = () => {
     const dx = x - LIGHT_X;
     const dy = y - LIGHT_Y;
     const dist = Math.hypot(dx, dy);
+    
+    // Early return if distance is effectively zero
+    if (dist < 1e-6) return liveParams.current.ambientLight;
+    
     const lightDirX = dx / dist;
     const lightDirY = dy / dist;
     
-    const dotProduct = lightDirX * ny + lightDirY * nx;
+    // Calculate angle between light direction and downward vector
+    const angleFromDownward = Math.acos((-lightDirY)); // Dot product with (0, -1)
+    const angleInDegrees = angleFromDownward * (180 / Math.PI);
     
-    // Calculate components using live params
+    // Check if point is within beam cone
+    if (angleInDegrees > liveParams.current.beamAngle / 2) {
+      return liveParams.current.ambientLight;
+    }
+    
+    // For points within cone, calculate intensity falloff based on angle
+    const angleRatio = angleInDegrees / (liveParams.current.beamAngle / 2);
+    const intensityFalloff = Math.cos(angleRatio * Math.PI / 2); // Smooth falloff
+    
+    // Calculate surface lighting using the original dot product
+    const dotProduct = lightDirX * nx + lightDirY * ny;
+    
+    // Calculate components using live params and apply cone falloff
     const ambient = liveParams.current.ambientLight;
-    const diffuse = liveParams.current.diffuseLight;
-    const specular = Math.pow(Math.max(0, dotProduct), 100) * liveParams.current.specularStrength;
-    
-    return Math.min(1.0, (ambient + diffuse + specular));
+    const diffuse = liveParams.current.diffuseLight * intensityFalloff;
+    const specular = Math.pow(Math.max(0, dotProduct), liveParams.current.specularExponent) * liveParams.current.specularStrength * intensityFalloff;
+    const coeffTotal = liveParams.current.ambientLight + liveParams.current.diffuseLight + liveParams.current.specularStrength;
+    return Math.min(1.0, (ambient + diffuse + specular) / coeffTotal);
   };
 
   return (
@@ -474,17 +507,34 @@ const SnowflakeSimulation = () => {
 
         <div className="space-y-2">
           <label className="block text-sm font-medium">
-            Wind Speed (m/s): {uiState.windSpeed.toFixed(1)}
+            Wind Speed Top (m/s): {uiState.windSpeedTop.toFixed(1)}
           </label>
           <Slider
             min={-2}
             max={2}
             stepSize={0.1}
             labelStepSize={1}
-            value={uiState.windSpeed}
+            value={uiState.windSpeedTop}
             onChange={(v) => {
-              liveParams.current.windSpeed = v;
-              setUiState(s => ({ ...s, windSpeed: v }));
+              liveParams.current.windSpeedTop = v;
+              setUiState(s => ({ ...s, windSpeedTop: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Wind Speed Bottom (m/s): {uiState.windSpeedBottom.toFixed(1)}
+          </label>
+          <Slider
+            min={-2}
+            max={2}
+            stepSize={0.1}
+            labelStepSize={1}
+            value={uiState.windSpeedBottom}
+            onChange={(v) => {
+              liveParams.current.windSpeedBottom = v;
+              setUiState(s => ({ ...s, windSpeedBottom: v }));
             }}
           />
         </div>
@@ -536,6 +586,40 @@ const SnowflakeSimulation = () => {
             onChange={(v) => {
               liveParams.current.specularStrength = v;
               setUiState(s => ({ ...s, specularStrength: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Specular Exponent: {uiState.specularExponent.toFixed(1)}
+          </label>
+          <Slider
+            min={0}
+            max={100}
+            stepSize={1}
+            labelStepSize={20}
+            value={uiState.specularExponent}
+            onChange={(v) => {
+              liveParams.current.specularExponent = v;
+              setUiState(s => ({ ...s, specularExponent: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Beam Angle (degrees): {uiState.beamAngle.toFixed(1)}
+          </label>
+          <Slider
+            min={5}
+            max={180}
+            stepSize={1}
+            labelStepSize={35}
+            value={uiState.beamAngle}
+            onChange={(v) => {
+              liveParams.current.beamAngle = v;
+              setUiState(s => ({ ...s, beamAngle: v }));
             }}
           />
         </div>
