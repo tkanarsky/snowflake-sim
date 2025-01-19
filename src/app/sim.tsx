@@ -4,18 +4,16 @@ import { Slider, Button, Checkbox } from '@blueprintjs/core';
 import '@blueprintjs/core/lib/css/blueprint.css';
 
 // Constants and Types
-interface SnowflakeState {
-  position: [number, number];
-  velocity: [number, number];
-  theta: number;
-  omega: number;
-  mass: number;
-  diameter: number;
-}
-
-interface SimParams {
+interface LiveParams {
   g: number;
   airPressure: number;
+  windSpeed: number;
+  ambientLight: number;
+  diffuseLight: number;
+  specularStrength: number;
+}
+
+interface InitParams {
   numFlakes: number;
   massMean: number;
   massVar: number;
@@ -23,6 +21,17 @@ interface SimParams {
   diameterVar: number;
   thetaMean: number;
   thetaVar: number;
+}
+
+type SimParams = LiveParams & InitParams;
+
+interface SnowflakeState {
+  position: [number, number];
+  velocity: [number, number];
+  theta: number;
+  omega: number;
+  mass: number;
+  diameter: number;
 }
 
 // Utility Functions
@@ -43,33 +52,34 @@ const normalRandom = (mean: number, variance: number) => {
   return mean + std * Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 };
 
-const createSnowflake = (params: SimParams): SnowflakeState => ({
+const createSnowflake = (initParams: InitParams): SnowflakeState => ({
   position: [Math.random() * 3.0, 9.0],  // Random x position from 0 to 3 meters, fixed y at 9 meters
   velocity: [0, 0],
-  theta: normalizeAngle(normalRandom(params.thetaMean * Math.PI / 180, params.thetaVar * Math.PI / 180)),
+  theta: normalizeAngle(normalRandom(initParams.thetaMean * Math.PI / 180, initParams.thetaVar * Math.PI / 180)),
   omega: 0,
-  mass: normalRandom(params.massMean, params.massVar) / 1e6, // Convert mg to kg
-  diameter: normalRandom(params.diameterMean, params.diameterVar) / 1000, // Convert mm to m
+  mass: normalRandom(initParams.massMean, initParams.massVar) / 1e6, // Convert mg to kg
+  diameter: normalRandom(initParams.diameterMean, initParams.diameterVar) / 1000, // Convert mm to m
 });
 
 // Physics update function from previous discussion
 function updateSnowflake(
   state: SnowflakeState,
   dt: number,
-  params: SimParams
+  { g, airPressure, windSpeed }: LiveParams
 ): SnowflakeState {
-  const { g, airPressure } = params;
   const rho = 1.225 * (airPressure / 1.0);
   
   const nx = Math.cos(state.theta);
   const ny = Math.sin(state.theta);
   
-  const vmag = Math.hypot(state.velocity[0], state.velocity[1]);
+  // Adjust velocity for wind
+  const relativeVx = state.velocity[0] - windSpeed;
+  const vmag = Math.hypot(relativeVx, state.velocity[1]);
   
   // Handle zero velocity case properly
   let vx = 0, vy = -1, aoa = state.theta;  // Default to falling straight down
   if (vmag > 1e-6) {
-    vx = state.velocity[0] / vmag;
+    vx = relativeVx / vmag;
     vy = state.velocity[1] / vmag;
     aoa = Math.acos(Math.max(-1, Math.min(1, vx * nx + vy * ny))); // Clamp to avoid numerical errors
   }
@@ -84,11 +94,10 @@ function updateSnowflake(
   const Cl = 0.5 * Math.sin(2 * aoa);  // Reduced lift coefficient
   
   // Calculate forces with dampening at high speeds
-//   const speedFactor = Math.min(1.0, 10.0 / (vmag + 1.0));  // Dampen forces at high speeds
   const Fdrag = 0.5 * rho * Cd * A * vmag * vmag * 1;
   const Flift = 0.5 * rho * Cl * A * vmag * vmag * 1;
   
-  // Apply forces - note that drag acts against velocity direction
+  // Apply forces - note that drag acts against relative velocity direction
   const ax = vmag > 1e-6 ? (-Fdrag * vx + Flift * nx) / state.mass : 0;
   const ay = vmag > 1e-6 ? (-Fdrag * vy + Flift * ny) / state.mass - g : -g;
   
@@ -102,10 +111,16 @@ function updateSnowflake(
   const new_vx = state.velocity[0] + ax * dt;
   const new_vy = state.velocity[1] + ay * dt;
   const new_x = state.position[0] + new_vx * dt;
+  let wrapped_x = new_x;
+  
+  // Wrap around screen horizontally
+  if (new_x < 0) wrapped_x = 3.0 + (new_x % 3.0);
+  if (new_x > 3.0) wrapped_x = new_x % 3.0;
+  
   const new_y = state.position[1] + new_vy * dt;
   
   return {
-    position: [new_x, new_y],
+    position: [wrapped_x, new_y],
     velocity: [new_vx, new_vy],
     theta: new_theta,
     omega: new_omega,
@@ -157,17 +172,35 @@ const DistSlider = ({
 
 // Main Component
 const SnowflakeSimulation = () => {
-  // Simulation parameters
-  const [params, setParams] = useState<SimParams>({
+  // Split params into live-update refs and initialization-only state
+  const liveParams = useRef<LiveParams>({
     g: 9.81,
     airPressure: 1.0,
+    windSpeed: 0,
+    ambientLight: 0.2,
+    diffuseLight: 0.5,
+    specularStrength: 0.8
+  });
+
+  // Simulation parameters that require reset
+  const [params, setParams] = useState<InitParams>({
     numFlakes: 1000,
     massMean: 1.0,
     massVar: 0.15,
     diameterMean: 6.0,
     diameterVar: 1.0,
     thetaMean: 47,
-    thetaVar: 100
+    thetaVar: 100,
+  });
+
+  // UI state for controlled components (sliders)
+  const [uiState, setUiState] = useState({
+    g: liveParams.current.g,
+    airPressure: liveParams.current.airPressure,
+    windSpeed: liveParams.current.windSpeed,
+    ambientLight: liveParams.current.ambientLight,
+    diffuseLight: liveParams.current.diffuseLight,
+    specularStrength: liveParams.current.specularStrength
   });
 
   // UI state
@@ -217,7 +250,7 @@ const SnowflakeSimulation = () => {
     // Update physics
     for (let step = 0; step < numSubsteps; step++) {
       snowflakesRef.current = snowflakesRef.current.map((flake, index) => {
-        const updated = updateSnowflake(flake, subDt, params);
+        const updated = updateSnowflake(flake, subDt, liveParams.current);
         
         // Store trail history
         if (showTrail) {
@@ -278,7 +311,8 @@ const SnowflakeSimulation = () => {
         // Draw orientation line
         const nx = Math.cos(flake.theta);
         const ny = Math.sin(flake.theta);
-        ctx.strokeStyle = 'white';
+        const brightness = calculateLighting(x, y, nx, ny);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${brightness})`;
         ctx.lineWidth = 5;
         ctx.beginPath();
         ctx.moveTo(
@@ -303,8 +337,11 @@ const SnowflakeSimulation = () => {
         );
         ctx.fill();
       } else {
-        // Draw simple snowflake
-        ctx.fillStyle = 'white';
+        // Draw simple snowflake with lighting
+        const nx = Math.cos(flake.theta);
+        const ny = Math.sin(flake.theta);
+        const brightness = calculateLighting(x, y, nx, ny);
+        ctx.fillStyle = `rgba(255, 255, 255, ${brightness})`;
         ctx.beginPath();
         ctx.arc(screenX, screenY, 2.5, 0, 2 * Math.PI);
         ctx.fill();
@@ -330,6 +367,28 @@ const SnowflakeSimulation = () => {
       }
     };
   }, [isPlaying]);
+
+  // Calculate lighting for a snowflake
+  const calculateLighting = (x: number, y: number, nx: number, ny: number): number => {
+    const LIGHT_X = 1.5;
+    const LIGHT_Y = 10.0;
+    
+    // Calculate light direction (normalized)
+    const dx = x - LIGHT_X;
+    const dy = y - LIGHT_Y;
+    const dist = Math.hypot(dx, dy);
+    const lightDirX = dx / dist;
+    const lightDirY = dy / dist;
+    
+    const dotProduct = lightDirX * ny + lightDirY * nx;
+    
+    // Calculate components using live params
+    const ambient = liveParams.current.ambientLight;
+    const diffuse = liveParams.current.diffuseLight;
+    const specular = Math.pow(Math.max(0, dotProduct), 100) * liveParams.current.specularStrength;
+    
+    return Math.min(1.0, (ambient + diffuse + specular));
+  };
 
   return (
     <div className="flex gap-4 p-4">
@@ -367,29 +426,35 @@ const SnowflakeSimulation = () => {
 
         <div className="space-y-2">
           <label className="block text-sm font-medium">
-            Gravity (m/s²): {params.g.toFixed(1)}
+            Gravity (m/s²): {uiState.g.toFixed(1)}
           </label>
           <Slider
             min={0}
             max={10}
             stepSize={0.1}
             labelStepSize={2}
-            value={params.g}
-            onChange={(v) => setParams(p => ({ ...p, g: v }))}
+            value={uiState.g}
+            onChange={(v) => {
+              liveParams.current.g = v;
+              setUiState(s => ({ ...s, g: v }));
+            }}
           />
         </div>
 
         <div className="space-y-2">
           <label className="block text-sm font-medium">
-            Air Pressure (atm): {params.airPressure.toFixed(2)}
+            Air Pressure (atm): {uiState.airPressure.toFixed(2)}
           </label>
           <Slider
             min={0}
             max={1}
             stepSize={0.01}
             labelStepSize={0.2}
-            value={params.airPressure}
-            onChange={(v) => setParams(p => ({ ...p, airPressure: v }))}
+            value={uiState.airPressure}
+            onChange={(v) => {
+              liveParams.current.airPressure = v;
+              setUiState(s => ({ ...s, airPressure: v }));
+            }}
           />
         </div>
 
@@ -404,6 +469,74 @@ const SnowflakeSimulation = () => {
             labelStepSize={5}
             value={params.numFlakes}
             onChange={(v) => setParams(p => ({ ...p, numFlakes: v }))}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Wind Speed (m/s): {uiState.windSpeed.toFixed(1)}
+          </label>
+          <Slider
+            min={-2}
+            max={2}
+            stepSize={0.1}
+            labelStepSize={1}
+            value={uiState.windSpeed}
+            onChange={(v) => {
+              liveParams.current.windSpeed = v;
+              setUiState(s => ({ ...s, windSpeed: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Ambient Light: {uiState.ambientLight.toFixed(2)}
+          </label>
+          <Slider
+            min={0}
+            max={1}
+            stepSize={0.01}
+            labelStepSize={0.2}
+            value={uiState.ambientLight}
+            onChange={(v) => {
+              liveParams.current.ambientLight = v;
+              setUiState(s => ({ ...s, ambientLight: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Diffuse Light: {uiState.diffuseLight.toFixed(2)}
+          </label>
+          <Slider
+            min={0}
+            max={1}
+            stepSize={0.01}
+            labelStepSize={0.2}
+            value={uiState.diffuseLight}
+            onChange={(v) => {
+              liveParams.current.diffuseLight = v;
+              setUiState(s => ({ ...s, diffuseLight: v }));
+            }}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium">
+            Specular Strength: {uiState.specularStrength.toFixed(2)}
+          </label>
+          <Slider
+            min={0}
+            max={1}
+            stepSize={0.01}
+            labelStepSize={0.2}
+            value={uiState.specularStrength}
+            onChange={(v) => {
+              liveParams.current.specularStrength = v;
+              setUiState(s => ({ ...s, specularStrength: v }));
+            }}
           />
         </div>
 
